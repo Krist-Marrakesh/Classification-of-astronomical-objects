@@ -1,13 +1,3 @@
-# -*- coding: utf-8 -*-
-"""
-nto2.py — финальная версия
-CatBoost (GPU) + Joint Optuna (HP + temperature + segment-wise class biases)
-+ кастомная редкостратификация + seed-ансамбль + OOF-метаслой + TTA
-+ физические правила + tie-break
-
-Запуск: просто Run (пути ниже — жёстко прописаны)
-"""
-
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -16,35 +6,30 @@ import pandas as pd
 from sklearn.metrics import f1_score
 from sklearn.linear_model import LogisticRegression
 
-# =========================
-# ЖЁСТКО прописанные пути
-# =========================
-train_path  = r"C:/Users/HYPERPC/PycharmProjects/FastAPIProject/NTO2/train (1).csv"
-test_path   = r"C:/Users/HYPERPC/PycharmProjects/FastAPIProject/NTO2/test.csv"
-sample_path = r"C:/Users/HYPERPC/PycharmProjects/FastAPIProject/NTO2/sample_submission.csv"
-out_path    = r"C:/Users/HYPERPC/PycharmProjects/FastAPIProject/NTO2/submission.csv"
 
-# =========================
-# Параметры
-# =========================
+train_path  = -
+test_path   = -
+sample_path = -
+out_path    = -
+
+
 folds        = 5
-iters        = 1200        # финальные итерации (GPU дешёвые; можно 1000–1400)
-tune_iters   = 400         # итерации в тюнинге
-tune_trials  = 120         # число Optuna-траев
+iters        = 1200        
+tune_iters   = 400         
+tune_trials  = 120         # number of Optuna trays
 seed         = 42
-seed_list    = [seed, seed+7, seed+13]  # seed-ансамбль (можно расширить)
+seed_list    = [seed, seed+7, seed+13]  # seed ensemble (can be expanded)
 exoplanet_boost = 1.6
 bias_low     = 0.6
 bias_high    = 1.6
-tta_n        = 3           # количество TTA-джиттеров
+tta_n        = 3           # amount of TTA jitters
 
-# =========================
+
 # Feature engineering
-# =========================
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
 
-    # авто-цветовые индексы, если отсутствуют
+    # auto-color indexes if missing
     def add_delta(a, b, name):
         if a in df.columns and b in df.columns and name not in df.columns:
             df[name] = df[a] - df[b]
@@ -61,14 +46,14 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
             x = pd.to_numeric(df[col], errors="coerce")
             df[f"log_{col}"] = np.log1p(np.clip(x, 0, None))
 
-    # spectral нормировки на background_noise
+    # spectral normalization on background_noise
     if "background_noise" in df.columns:
         noise = 1.0 + df["background_noise"].abs()
         for sp in ["h_alpha_strength","oIII_strength","na_d_strength"]:
             if sp in df.columns and f"{sp}_norm" not in df.columns:
                 df[f"{sp}_norm"] = df[sp] / noise
 
-    # модуль собственного движения
+    # proper motion module
     if "pm_ra" in df.columns and "pm_dec" in df.columns and "pm_total" not in df.columns:
         df["pm_total"] = np.sqrt(df["pm_ra"].fillna(0)**2 + df["pm_dec"].fillna(0)**2)
 
@@ -76,7 +61,7 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     if "g_mag" in df.columns and "extinction" in df.columns and "g_mag_corr" not in df.columns:
         df["g_mag_corr"] = df["g_mag"] - 0.8 * df["extinction"].fillna(0)
 
-    # Абсолютная величина в g (при наличии параллакса)
+    # Absolute magnitude in g (with parallax)
     if "g_mag" in df.columns and "parallax" in df.columns:
         plx = pd.to_numeric(df["parallax"], errors="coerce")
         with np.errstate(divide='ignore', invalid='ignore'):
@@ -89,16 +74,15 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
         pm = pd.to_numeric(df["pm_total"], errors="coerce").clip(lower=1e-6)
         df["H_g"] = df["g_mag"] + 5*np.log10(pm) + 5
 
-    # Нелинейные взаимодействия цветов
+    # Nonlinear color interactions
     for a,b in [("u_g_auto","g_r_auto"),("g_r_auto","r_i_auto"),("r_i_auto","i_z_auto")]:
         if a in df.columns and b in df.columns and f"{a}__{b}" not in df.columns:
             df[f"{a}__{b}"] = df[a] * df[b]
 
     return df
 
-# =========================
+
 # Utilities
-# =========================
 def find_object_and_target(train: pd.DataFrame):
     obj_candidates = [c for c in train.columns if "object" in c.lower() and "id" in c.lower()]
     object_id = obj_candidates[0] if obj_candidates else train.columns[0]
@@ -180,7 +164,7 @@ def apply_physical_rules(scores_df: pd.DataFrame, meta_df: pd.DataFrame, class_c
         if gal_cols and mask_stellar.any():
             out.loc[mask_stellar, gal_cols] *= 0.75
 
-    # при высоком фоне — в пользу galaxy
+    # with a high background - in favor of Galaxy
     if has_bn and "galaxy" in class_cols:
         out.loc[bn > bn.median(), "galaxy"] *= 1.05
 
@@ -194,27 +178,26 @@ def jitter_mags(df, sigma=0.02, cols=("u_mag","g_mag","r_mag","i_mag","z_mag")):
             dfj[c] = pd.to_numeric(dfj[c], errors="coerce") + noise
     return add_features(dfj)
 
-# =========================
+
 # MAIN
-# =========================
 def main():
     from catboost import CatBoostClassifier, Pool as CBPool
     import optuna
 
-    # Загрузка
+    # download
     train = pd.read_csv(train_path)
     test  = pd.read_csv(test_path)
     sample = pd.read_csv(sample_path)
 
     object_id, target_col = find_object_and_target(train)
     if "type" in train.columns:
-        target_col = "type"  # явная фиксация, если метка называется 'type'
+        target_col = "type"  # explicit commit if the label is called 'type'
 
     # FE
     train_fe = add_features(train)
     test_fe  = add_features(test)
 
-    # Выравнивание колонок и формирование X/y
+ # Aligning columns and shaping X/y
     features = [c for c in train_fe.columns if c not in [target_col, object_id]]
     missing_in_test = [c for c in features if c not in test_fe.columns]
     for c in missing_in_test:
@@ -224,18 +207,18 @@ def main():
     X_test = test_fe[features].copy()
     y = train_fe[target_col].astype(str)
 
-    # Категориальные индексы
+  # Categorical indices
     cat_idx, _ = cat_feature_indices(X)
     classes, class_weights = compute_class_weights(y, exoplanet_boost)
 
-    # Сегменты (на X и X_test)
+    # Segments (on X and X_test)
     seg_extrag_X, seg_stellar_X = make_segment_masks(X)
     seg_extrag_T, seg_stellar_T = make_segment_masks(X_test)
 
-    # Фолды (редкостратификация)
+   # Folds (rare stratification)
     folds_idx, k = make_rare_stratified_folds(y, folds, seed)
 
-    # Базовые параметры CatBoost (GPU, ранняя остановка)
+  # Basic CatBoost settings (GPU, early stopping)
     DEFAULT = dict(
         loss_function="MultiClass",
         eval_metric="TotalF1:average=Macro",
@@ -249,7 +232,7 @@ def main():
         grow_policy="SymmetricTree",
     )
 
-    # Joint-Optuna: CatBoost HP + temperature + три набора biases
+    # Joint-Optuna: CatBoost HP + temperature + three sets of biases
     def trial_to_params_and_biases(trial):
         params = dict(
             **DEFAULT,
@@ -260,7 +243,7 @@ def main():
             border_count=trial.suggest_int("border_count", 128, 255),
             random_strength=trial.suggest_float("random_strength", 0.0, 2.0),
         )
-        # GPU-совместимый выбор типа бутстрапа:
+        # guarantee correct bootstrap (GPU)
         if trial.suggest_categorical("use_subsample", [True, False]):
             params.update(dict(
                 bootstrap_type="Bernoulli",
@@ -299,7 +282,7 @@ def main():
         scaled = oof_proba ** temp
         scaled /= np.clip(scaled.sum(axis=1, keepdims=True), 1e-12, None)
 
-        # сегментные маски (на X)
+    # segment masks (on X)
         ex_mask = seg_extrag_X
         st_mask = seg_stellar_X
         df_mask = ~(ex_mask | st_mask)
@@ -332,7 +315,7 @@ def main():
         else:
             best_params[k_] = v
 
-    # гарантируем корректный бутстрап (GPU)
+   # guarantee correct bootstrap (GPU)
     bt = best_params.get("bootstrap_type")
     if bt == "Bernoulli":
         best_params.setdefault("subsample", 0.8)
@@ -360,10 +343,10 @@ def main():
     print("[Bias extrag]",  {k: round(v,3) for k,v in bias_map_extrag.items()})
     print("[Bias stellar]", {k: round(v,3) for k,v in bias_map_stellar.items()})
 
-    # =========================
-    # Финальное обучение: seed-ансамбль × K-fold
-    # + параллельно строим OOF (по первому сидy) для метаслоя
-    # =========================
+  
+  # Final training: seed ensemble × K-fold
+# + parallel construction of OOF (from the first seed) for the meta layer
+   
     all_models = []
     oof_proba_meta = np.zeros((len(X), len(classes)), dtype=float)
     first_seed_models = None
@@ -384,20 +367,20 @@ def main():
                 aligned = np.zeros((len(va_idx), len(classes)))
                 for j, cls in enumerate(classes):
                     aligned[:, j] = p[:, mc.index(cls)]
-                # усреднение по фолдовым моделям: копим, потом делим на K
+              # averaging over fold models: save, then divide by K
                 oof_proba_meta[va_idx] += aligned
 
         all_models.append(models)
         if si == 0:
             first_seed_models = models
 
-    # усредняем по K (для первого сида)
+  # average over K (for the first seed)
     oof_counts = np.zeros(len(X), dtype=int)
     for _, va_idx in folds_idx:
         oof_counts[va_idx] += 1
     oof_proba_meta /= np.clip(oof_counts[:, None], 1, None)
 
-    # temperature + сегмент-биасы на OOF
+    # temperature + segment-biases on OOF
     oof_scores = oof_proba_meta ** best_temp
     oof_scores /= np.clip(oof_scores.sum(axis=1, keepdims=True), 1e-12, None)
     ex_mask = seg_extrag_X
@@ -408,7 +391,7 @@ def main():
         oof_scores[ex_mask, j] *= float(bias_map_extrag.get(cls, 1.0))
         oof_scores[st_mask, j] *= float(bias_map_stellar.get(cls, 1.0))
 
-    # мета-признаки (OOF-скор + физ-подсказки)
+   # meta-features (OOF-score + physical cues)
     def num_col(dff, name):
         return pd.to_numeric(dff.get(name, 0), errors="coerce").fillna(0).values.reshape(-1,1)
     meta_X = np.hstack([
@@ -423,10 +406,10 @@ def main():
     meta = LogisticRegression(multi_class="multinomial", max_iter=200, C=2.0, n_jobs=-1)
     meta.fit(meta_X, meta_y)
 
-    # =========================
-    # Инференс: усреднение по всем моделям → TTA → temperature → сегмент-биасы
-    # → физика (мягкая и жёсткая) → метаслой-бленд → tie-break → argmax
-    # =========================
+   
+  # Inference: average over all models → TTA → temperature → segment-biases
+# → physics (soft and hard) → metalayer-blend → tie-break → argmax
+    
     test_pool = CBPool(X_test, cat_features=cat_idx)
     proba_test = np.zeros((len(X_test), len(classes)), dtype=float)
 
@@ -438,11 +421,11 @@ def main():
                 proba_test[:, j] += p[:, mc.index(cls)]
     proba_test /= (len(all_models) * len(all_models[0]))
 
-    # TTA: джиттер фотометрии и усреднение
+  # TTA: Photometry Jitter and Averaging
     tta_scores = np.zeros_like(proba_test)
     for _ in range(tta_n):
         tta_fe = jitter_mags(test, sigma=0.02)
-        # выравнять колонки
+        # align columns
         for c in features:
             if c not in tta_fe.columns:
                 tta_fe[c] = np.nan
@@ -464,7 +447,7 @@ def main():
     scores = proba_test ** best_temp
     scores /= np.clip(scores.sum(axis=1, keepdims=True), 1e-12, None)
 
-    # три набора биасов по сегментам (на X_test)
+ # three sets of biases by segments (on X_test)
     ex_mask_T = seg_extrag_T
     st_mask_T = seg_stellar_T
     df_mask_T = ~(ex_mask_T | st_mask_T)
@@ -473,7 +456,7 @@ def main():
         scores[ex_mask_T, j] *= float(bias_map_extrag.get(cls, 1.0))
         scores[st_mask_T, j] *= float(bias_map_stellar.get(cls, 1.0))
 
-    # мета-признаки на тесте и бленд
+  # meta-features on the test and blend
     meta_T = np.hstack([
         scores,
         num_col(test_fe, "pm_total"),
@@ -485,11 +468,11 @@ def main():
     alpha = 0.7
     scores_blend = alpha * meta_proba + (1 - alpha) * scores
 
-    # мягкая физика
+    # soft physics
     scores_df = pd.DataFrame(scores_blend, columns=classes)
     scores_df = apply_physical_rules(scores_df, test_fe, classes)
 
-    # жёсткий stellar-клип для экстремальных pm/parallax
+ # hard stellar clip for extreme pm/parallax
     pmv = pd.to_numeric(test_fe.get("pm_total", 0), errors="coerce").fillna(0)
     plx = pd.to_numeric(test_fe.get("parallax", 0), errors="coerce").fillna(0)
     hard_stellar = (pmv > 20) | (plx.abs() > 3)
@@ -501,7 +484,7 @@ def main():
         S[hard_stellar.values, q_idx] *= 0.2
         scores_df = pd.DataFrame(S, columns=classes)
 
-    # tie-breaker: galaxy vs quasar при «почти ничьей»
+    # tie-breaker: galaxy vs quasar
     if "galaxy" in classes and "quasar" in classes:
         g_idx = classes.index("galaxy")
         q_idx = classes.index("quasar")
@@ -509,7 +492,7 @@ def main():
         top = S.max(axis=1, keepdims=True)
         second = np.partition(S, -2, axis=1)[:, -2][:, None]
         margin = (top - second).ravel()
-        near = margin < 0.02  # порог ничьей
+        near = margin < 0.02  # draw threshold
 
         ha = pd.to_numeric(test_fe.get("h_alpha_strength_norm", test_fe.get("h_alpha_strength", 0)), errors="coerce").fillna(0)
         o3 = pd.to_numeric(test_fe.get("oIII_strength_norm",  test_fe.get("oIII_strength",  0)), errors="coerce").fillna(0)
@@ -524,14 +507,13 @@ def main():
 
     final_labels = np.array(classes)[scores_df.values.argmax(axis=1)]
 
-    # =========================
+    
     # One-hot submission
-    # =========================
     class_cols = [c for c in sample.columns if c != "object_id"]
     if not class_cols:
         class_cols = classes
 
-    # определяем object_id из test
+    # determine object_id from test
     obj_candidates = [c for c in test.columns if "object" in c.lower() and "id" in c.lower()]
     obj_col = obj_candidates[0] if obj_candidates else test.columns[0]
 
@@ -553,3 +535,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
