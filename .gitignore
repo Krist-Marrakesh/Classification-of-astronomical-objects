@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.ipynb_checkpoints
+
+# Venv/Conda
+.venv/
+env/
+.conda/
+
+# Data & models
+data/
+datasets/
+models/
+checkpoints/
+*.cbm
+*.bin
+*.pkl
+
+# Logs & artifacts
+logs/
+mlruns/
+wandb/
+*.log
+
+# OS/IDE
+.DS_Store
+.idea/
+.vscode/
