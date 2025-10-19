@@ -1,70 +1,51 @@
-# Celestial Objects Classification (CatBoost + Optuna)
-
-Classification of celestial objects (stars / quasars / galaxies / white dwarfs / red giants / exoplanet candidates) with rare-class stratification, TTA, and meta-blending.
-
-> **Important:** The repository **does not** contain the dataset or pre-trained weights.
-> You can train the model on your own data and obtain the weights locally.
-
-## Features
-- CatBoost MultiClass + custom stratification for rare classes.
-- Optuna: joint hyperparameter and bias weight tuning (global/extragal/stellar) + temperature.
-- Postprocessing with "physical" rules (soft/hard), TTA (photometric jitter).
-- Meta-layer (LogisticRegression) based on OOF scores + physical features.
-
-## Installation
-```bash
 python -m venv .venv && source .venv/bin/activate # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 
+Expected data format (BYOD)
 
-Ожидаемый формат данных (BYOD)
-
-train.csv: object_id, <features...>, type — целевая колонка называется type (если называется иначе — скрипт попробует найти её автоматически).
+train.csv: object_id, <features...>, type — the target column is called "type" (if it's named differently, the script will try to find it automatically).
 
 test.csv: object_id, <features...>
 
-sample_submission.csv: object_id,<class1>,...,<classN> — столбцы классов должны совпадать с вашими метками.
+sample_submission.csv: object_id,<class1>,...,<classN> — the class columns must match your labels.
 
-Скрипт сам досчитает производные признаки (add_features()), выровняет колонки train/test и обработает базовые физические эвристики (parallax, proper motion и т.п., если доступны).
+The script will automatically calculate the derived features (add_features()), align the train/test columns, and process basic physics heuristics (parallax, proper motion, etc., if available).
 
-Запуск
-Обучение (получить локальные веса и предсказания)
+Run
+Training (get local weights and predictions)
 python main.py \
-  --train path/to/train.csv \
-  --test path/to/test.csv \
-  --sample path/to/sample_submission.csv \
-  --out predictions.csv \
-  --save_models \
-  --device gpu   # или cpu
+--train path/to/train.csv \
+--test path/to/test.csv \
+--sample path/to/sample_submission.csv \
+--out predictions.csv \
+--save_models \
+--device gpu # or cpu
 
-Инференс на своих уже обученных весах
+Inference on your own trained weights
 python main.py \
-  --train path/to/train.csv \
-  --test path/to/test.csv \
-  --sample path/to/sample_submission.csv \
-  --out predictions.csv \
-  --load_models \
-  --device gpu   # или cpu
+--train path/to/train.csv \
+--test path/to/test.csv \
+--sample path/to/sample_submission.csv \
+--out predictions.csv \
+--load_models \
+--device gpu # or cpu
 
+Parameters:
 
-Параметры:
+--save_models — save the final full-data CatBoost model and metalayer (to the local models/ folder, which you do not commit).
 
---save_models — сохранить финальную full-data CatBoost-модель и метаслой (в локальную папку models/, которую вы не коммитите).
+--load_models — load locally saved weights (models/model_full.cbm, models/meta_lr.joblib) and use them.
 
---load_models — загрузить уже сохранённые локально веса (models/model_full.cbm, models/meta_lr.joblib) и использовать их.
+--blend_final — blending weight of the final full-data model with the K×seeds ensemble (default 0.5).
 
---blend_final — вес блендинга финальной full-data модели с ансамблем K×seeds (по умолчанию 0.5).
+--device — gpu (default) or cpu. If you don't have CUDA, specify --device cpu.
 
---device — gpu (по умолчанию) или cpu. Если у вас нет CUDA — укажите --device cpu.
+Notes
 
+Macro-F1 is used as the target metric in validation.
 
+If you don't have parallax, pm_ra/pm_dec, or background_noise features, the script will continue to run correctly, but some of the physical rules will be disabled.
 
-Примечания
+For robustness on rare classes, class weights and segment bias weights (global / extragal / stellar), selected by Optuna, are used.
 
-Макро-F1 используется как целевая метрика в валидации.
-
-Если у вас нет признаков parallax, pm_ra/pm_dec, background_noise, скрипт корректно продолжит работу, просто часть физ. правил будет отключена.
-
-Для устойчивости на редких классах применяются классовые веса и сегментные bias-веса (global / extragal / stellar), которые подбираются Optuna.
-
-Логи Optuna по умолчанию печатаются в stdout (можно обернуть вызов отдельным логгером/редиректором вывода).
+Optuna logs are printed to stdout by default (you can wrap the call with a separate logger/output redirector)
