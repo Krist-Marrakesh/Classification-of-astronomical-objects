@@ -92,43 +92,29 @@ python main.py \
 Notable CLI parameters
 
 --save_models — save final full-data CatBoost model and meta-layer locally.
-
 --load_models — load previously saved models/model_full.cbm and models/meta_lr.joblib.
-
 --blend_final — blend weight between the K×seeds ensemble and the final full-data model (0..1, default 0.5).
-
 --device — gpu (default) or cpu (use cpu if no CUDA is available).
 
 How it works (high-level)
 
 Feature engineering – colors, log-SNR, reduced proper motion H_g, extinction-corrected magnitudes, etc.
-
 Rare-class aware K-Fold – stable validation when minority classes exist.
-
 Optuna search – tunes CatBoost HPs + temperature + three bias maps (global/extragal/stellar).
-
 Seed×Fold ensemble – out-of-fold probabilities are used to train a meta-blender (LogReg).
-
 Test-time augmentation – photometric jitter averaging (optional, on by default).
-
 Post-processing – temperature scaling, segment biases, physics-aware nudges, tie-breakers.
-
 Submission – one-hot prediction table matching sample_submission.csv schema.
-
 Primary metric: Macro-F1 (also per-class F1 and confusion insights when you add logging).
 
 Reproducibility tips
 
 Pin versions (pip freeze > requirements.lock) and keep a fixed random_seed.
-
 Save Optuna best trial parameters and thresholds if you need to re-use them across runs.
-
 If your labels set changes, align sample_submission.csv columns accordingly.
 
 Troubleshooting
 
 No GPU? Use --device cpu. The pipeline remains the same (just slower).
-
 Different target name? The script attempts to auto-detect; otherwise rename to type.
-
 Missing features (e.g., parallax, pm_*)? The pipeline still runs; physics-aware rules degrade gracefully.
