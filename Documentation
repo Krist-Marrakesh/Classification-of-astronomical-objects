@@ -1,169 +1,171 @@
-AstroCatBoostNet: A Physically-Regularized Multi-Segment Gradient Ensemble for Astronomical Object Classification
-Abstract
 
-AstroCatBoostNet is a hybrid gradient-boosting architecture for high-precision astrophysical classification.
-It integrates GPU-accelerated CatBoost ensembles with physically aware calibration, temperature scaling, and segment-specific bias adaptation jointly optimized via Optuna.
-The model reaches macro-F1 ≈ 0.97 and provides interpretable, physically constrained decision boundaries distinguishing stellar, galactic, and extragalactic sources.
+### AstroCatBoostNet: A Physically-Regularized Multi-Segment Gradient Ensemble for Astronomical Object Classification
 
-1. Introduction
+### Abstract
 
-Modern astronomical surveys (Gaia DR3, SDSS DR16, etc.) produce billions of records, requiring scalable and physically consistent ML systems.
-Traditional classifiers ignore domain priors such as parallax (π), proper motion (μ), or interstellar extinction (A_V).
+AstroCatBoostNet is a hybrid gradient-boosting architecture for high-precision astrophysical classification. It integrates GPU-accelerated CatBoost ensembles with physically aware calibration, temperature scaling, and segment-specific bias adaptation jointly optimized via Optuna. The model reaches macro-F1 $\approx 0.97$ and provides interpretable, physically constrained decision boundaries distinguishing stellar, galactic, and extragalactic sources.
 
-AstroCatBoostNet embeds such priors directly into its probabilistic calibration process.
-The result is a model that is both interpretable and state-of-the-art in accuracy.
+### 1. Introduction
 
-2. Data Representation
+Modern astronomical surveys (Gaia DR3, SDSS DR16, etc.) produce billions of records, requiring scalable and physically consistent ML systems. Traditional classifiers ignore domain priors such as parallax ($\pi$), proper motion ($\mu$), or interstellar extinction ($A_V$).
 
-Each object is represented by a feature vector xᵢ ∈ ℝᵈ and label yᵢ ∈ 𝒴 = {1,…,K},
-where 𝒴 = {main_sequence_star, red_giant, white_dwarf, galaxy, quasar, exoplanet_candidate}.
+AstroCatBoostNet embeds such priors directly into its probabilistic calibration process. The result is a model that is both interpretable and state-of-the-art in accuracy.
 
-Derived features
+### 2. Data Representation
 
-u − g = u_mag − g_mag
+Each object is represented by a feature vector $x_i \in \mathbb{R}^d$ and label $y_i \in \mathcal{Y} = \{1, \dots, K\}$, where $\mathcal{Y} = \{\text{main\_sequence\_star, red\_giant, white\_dwarf, galaxy, quasar, exoplanet\_candidate}\}$.
 
-g − r = g_mag − r_mag
+**Derived features**
 
-r − i = r_mag − i_mag
+$u - g = u_{\text{mag}} - g_{\text{mag}}$
 
-i − z = i_mag − z_mag
+$g - r = g_{\text{mag}} - r_{\text{mag}}$
 
-H_g = g_mag + 5 · log₁₀(√(μ_α² + μ_δ²)) + 5
+$r - i = r_{\text{mag}} - i_{\text{mag}}$
 
-M_g = g_mag − 5 · log₁₀(1000 / π) + 5 − 0.8 · A_V
+$i - z = i_{\text{mag}} - z_{\text{mag}}$
 
+Reduced proper motion:
+$$
+H_g = g_{\text{mag}} + 5 \cdot \log_{10}(\sqrt{\mu_{\alpha}^2 + \mu_{\delta}^2}) + 5
+$$
+Absolute magnitude with extinction correction:
+$$
+M_g = g_{\text{mag}} - 5 \cdot \log_{10}(1000 / \pi) + 5 - 0.8 \cdot A_V
+$$
 These relations approximate empirical color–motion separations between stellar and extragalactic populations.
 
-3. Architecture Overview
+### 3. Architecture Overview
 
 AstroCatBoostNet has three key layers:
 
-Base Gradient-Ensemble — CatBoost GPU model fθ minimizing multi-class log-loss.
+1.  **Base Gradient-Ensemble** — CatBoost GPU model $f_{\theta}$ minimizing multi-class log-loss.
+2.  **Physical Calibration** — applies temperature scaling and segment-wise biases.
+3.  **Segment Ensemble + Tie-Breaker** — interprets stellar/extragalactic context and spectral ambiguity.
 
-Physical Calibration — applies temperature scaling and segment-wise biases.
+#### 3.1 Base Gradient-Ensemble
 
-Segment Ensemble + Tie-Breaker — interprets stellar/extragalactic context and spectral ambiguity.
-
-3.1 Base Gradient-Ensemble
-
-Each CatBoost model outputs logits zᵢ = fθ(xᵢ) and class probabilities:
-
-pᵢₖ = exp(zᵢₖ) / Σⱼ exp(zᵢⱼ)
-
-Ensemble averaging over S seeds and K folds:
-
-p̄ᵢ = (1 / S K) · Σₛ Σₖ pᵢ⁽ˢ,ᵏ⁾
-
+Each CatBoost model outputs logits $z_i = f_{\theta}(x_i)$ and class probabilities:
+$$
+p_{ik} = \frac{\exp(z_{ik})}{\sum_{j} \exp(z_{ij})}
+$$
+Ensemble averaging over $S$ seeds and $K$ folds:
+$$
+\bar{p}_i = \frac{1}{SK} \cdot \sum_{s} \sum_{k} p_{i}^{(s,k)}
+$$
 Training objective (multi-class cross-entropy):
+$$
+L(\theta) = -\frac{1}{N} \sum_{i} \sum_{k} y_{ik} \log p_{ik}
+$$
 
-L(θ) = −(1 / N) Σᵢ Σₖ yᵢₖ log pᵢₖ
-
-3.2 Physical Calibration Layer
+#### 3.2 Physical Calibration Layer
 
 Temperature scaling and bias correction:
+$$
+\tilde{p}_{ik} = \frac{(p_{ik})^T \cdot b_{s(i),k}}{\sum_{j} (p_{ij})^T \cdot b_{s(i),j}}
+$$
+Where:
+- $T$ — temperature controlling probability sharpness
+- $b_{s(i),k}$ — bias for segment $s(i)$ and class $k$
+- $s(i) \in \{\text{global, stellar, extragalactic}\}$, defined as:
+  - $\text{stellar} \quad \text{if} \quad |\pi_i| > 1 \text{ or } \mu_i > 5$
+  - $\text{extragalactic} \quad \text{if} \quad |\pi_i| < 0.1 \text{ and } \mu_i < 0.3$
+  - $\text{global} \quad \text{otherwise}$
 
-p̃ᵢₖ = (pᵢₖ)ᵀ · bₛ(ᵢ),ₖ / Σⱼ (pᵢⱼ)ᵀ · bₛ(ᵢ),ⱼ
-
-Where
-
-T — temperature controlling probability sharpness
-
-bₛ(ᵢ),ₖ — bias for segment s(i) and class k
-
-s(i) ∈ {global, stellar, extragalactic}, defined as
-
-stellar        if |πᵢ| > 1 or μᵢ > 5  
-extragalactic  if |πᵢ| < 0.1 and μᵢ < 0.3  
-global         otherwise
-
-3.3 Segment Tie-Breaker
+#### 3.3 Segment Tie-Breaker
 
 Margin between top-2 classes:
-
-Δᵢ = maxₖ p̃ᵢₖ − second_maxₖ p̃ᵢₖ
-
-If Δᵢ < ε and emission lines (Hα or [O III]) are strong:
-→ increase p̃(quasar) by 5% and decrease p̃(galaxy) by 5%.
+$$
+\Delta_i = \max_k \tilde{p}_{ik} - \text{second\_max}_k \tilde{p}_{ik}
+$$
+If $\Delta_i < \epsilon$ and emission lines (H$\alpha$ or [O III]) are strong:
+→ increase $\tilde{p}(\text{quasar})$ by 5% and decrease $\tilde{p}(\text{galaxy})$ by 5%.
 
 This simulates astrophysical discrimination in spectral surveys.
 
-4. Optimization
-4.1 Rare-Class Stratification
+### 4. Optimization
+
+#### 4.1 Rare-Class Stratification
 
 Each class appears in every fold:
-|Vⱼ ∩ { yᵢ = c }| ≥ 1 for all c,j
+$$
+|V_j \cap \{ y_i = c \}| \ge 1 \quad \text{for all } c, j
+$$
 
-4.2 Joint Optuna Optimization
+#### 4.2 Joint Optuna Optimization
 
-Joint search for CatBoost hyperparameters, temperature T, and bias bₛ,ₖ:
+Joint search for CatBoost hyperparameters, temperature $T$, and bias $b_{s,k}$:
+$$
+\text{maximize} \quad F_{1\_macro}(\text{argmax}_k \tilde{p}_{ik})
+$$
+**Search ranges:**
 
-maximize F₁_macro(argmaxₖ p̃ᵢₖ)
+| Parameter       | Range         |
+|-----------------|---------------|
+| `depth`         | 5 – 10        |
+| `learning_rate` | 0.01 – 0.2    |
+| `l2_leaf_reg`   | 0.5 – 50      |
+| temperature $T$ | 0.8 – 1.4     |
+| bias $b_{s,k}$  | 0.6 – 1.8     |
 
-Search ranges:
+#### 4.3 Early Stopping
 
-Parameter	Range
-depth	5 – 10
-learning_rate	0.01 – 0.2
-l2_leaf_reg	0.5 – 50
-temperature T	0.8 – 1.4
-bias bₛ,ₖ	0.6 – 1.8
-4.3 Early Stopping
+Stop when $\Delta F_1 < 10^{-4}$ over 30 iterations.
 
-Stop when ΔF₁ < 1e-4 over 30 iterations.
-
-5. Physical Regularization
+### 5. Physical Regularization
 
 Astrophysical priors are applied multiplicatively:
-
+$$
 R(x) =
-  0.8  for stellar classes if (π,μ) indicate extragalactic
-  1.1  for galaxies/quasars if (π,μ) near zero
-  0.75 for galaxies/quasars if |π|>1 or μ>5
-  1.05 for galaxy if background_noise > median
-
-
+\begin{cases}
+0.8  & \text{for stellar classes if } (\pi, \mu) \text{ indicate extragalactic} \\
+1.1  & \text{for galaxies/quasars if } (\pi, \mu) \text{ near zero} \\
+0.75 & \text{for galaxies/quasars if } |\pi| > 1 \text{ or } \mu > 5 \\
+1.05 & \text{for galaxy if } \text{background\_noise} > \text{median}
+\end{cases}
+$$
 Corrected posterior:
-p̂ᵢₖ = R(xᵢ) · p̃ᵢₖ
+$$
+\hat{p}_{ik} = R(x_i) \cdot \tilde{p}_{ik}
+$$
 
-6. Ensemble and Inference
+### 6. Ensemble and Inference
 
 Final prediction distribution per object:
-
-p̄ᵢ = (1 / S K) Σₛ Σₖ pᵢ⁽ˢ,ᵏ⁾
-
+$$
+\bar{p}_i = \frac{1}{SK} \sum_{s} \sum_{k} p_{i}^{(s,k)}
+$$
 Predicted class:
-ŷᵢ = argmaxₖ p̄ᵢₖ
+$$
+\hat{y}_i = \text{argmax}_k \bar{p}_{ik}
+$$
 
-7. Results
-Metric	Validation (OOF)	Public Test
-Macro-F₁	0.971 ± 0.004	0.968 – 0.972
-Inference time	1.1 ms / object	RTX 4080 GPU
-Features used	48 – 52	after augmentation
+### 7. Results
+
+| Metric | Validation (OOF) | Public Test |
+|---|---|---|
+| Macro-F₁ | $0.971 \pm 0.004$ | $0.968 – 0.972$ |
+| Inference time | $1.1 \text{ ms} / \text{object}$ | RTX 4080 GPU |
+| Features used | 48 – 52 | after augmentation|
 
 Residual confusion remains between galaxy and quasar, reflecting intrinsic spectral overlap.
 
+### 9. Conclusion
 
-9. Conclusion
-
-We presented AstroCatBoostNet, a physically regularized gradient ensemble for astronomical classification.
-Its unified optimization of CatBoost hyperparameters, temperature scaling, and astrophysical bias vectors provides high accuracy (F₁ ≈ 0.97) and interpretability.
+We presented AstroCatBoostNet, a physically regularized gradient ensemble for astronomical classification. Its unified optimization of CatBoost hyperparameters, temperature scaling, and astrophysical bias vectors provides high accuracy ($F_1 \approx 0.97$) and interpretability.
 
 Formally, inference operates in a constrained posterior space:
-
-p̃ᵢₖ = (pᵢₖ)ᵀ · bₛ(ᵢ),ₖ / Σⱼ (pᵢⱼ)ᵀ · bₛ(ᵢ),ⱼ,
-with bₛ(ᵢ),ₖ > 0.
-
+$$
+\tilde{p}_{ik} = \frac{(p_{ik})^T \cdot b_{s(i),k}}{\sum_{j} (p_{ij})^T \cdot b_{s(i),j}}, \quad \text{with} \quad b_{s(i),k} > 0
+$$
 This bridges data-driven learning with theory-driven astrophysics, enabling physically consistent predictions.
 
 Future extensions include:
 
-differentiable bias learning with uncertainty calibration;
+-   differentiable bias learning with uncertainty calibration;
+-   spectral autoencoder embeddings;
+-   multi-objective optimization balancing physical plausibility and accuracy.
 
-spectral autoencoder embeddings;
+**Acknowledgements**
 
-multi-objective optimization balancing physical plausibility and accuracy.
-
-Acknowledgements
-
-Implemented using CatBoost 1.2 (GPU) and Optuna 3.0, trained on NVIDIA RTX 4080.
-Inspired by physical priors from Gaia DR3 and SDSS DR16 datasets.
+Implemented using CatBoost 1.2 (GPU) and Optuna 3.0, trained on NVIDIA RTX 4080. Inspired by physical priors from Gaia DR3 and SDSS DR16 datasets.
