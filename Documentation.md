@@ -14,7 +14,6 @@ AstroCatBoostNet embeds such priors directly into its probabilistic calibration 
 ### 2. Data Representation
 
 Each object is represented by a feature vector $x_i \in \mathbb{R}^d$ and label $y_i \in \mathcal{Y} = \{1, \dots, K\}$, where $\mathcal{Y} = \{\text{main\_sequence\_star, red\_giant, white\_dwarf, galaxy, quasar, exoplanet\_candidate}\}$.
-
 **Derived features**
 
 $u - g = u_{\text{mag}} - g_{\text{mag}}$
@@ -26,13 +25,16 @@ $r - i = r_{\text{mag}} - i_{\text{mag}}$
 $i - z = i_{\text{mag}} - z_{\text{mag}}$
 
 Reduced proper motion:
+
 $$
 H_g = g_{\text{mag}} + 5 \cdot \log_{10}(\sqrt{\mu_{\alpha}^2 + \mu_{\delta}^2}) + 5
 $$
 Absolute magnitude with extinction correction:
+
 $$
 M_g = g_{\text{mag}} - 5 \cdot \log_{10}(1000 / \pi) + 5 - 0.8 \cdot A_V
 $$
+
 These relations approximate empirical color–motion separations between stellar and extragalactic populations.
 
 ### 3. Architecture Overview
@@ -46,14 +48,19 @@ AstroCatBoostNet has three key layers:
 #### 3.1 Base Gradient-Ensemble
 
 Each CatBoost model outputs logits $z_i = f_{\theta}(x_i)$ and class probabilities:
+
 $$
 p_{ik} = \frac{\exp(z_{ik})}{\sum_{j} \exp(z_{ij})}
 $$
+
 Ensemble averaging over $S$ seeds and $K$ folds:
+
 $$
 \bar{p}_i = \frac{1}{SK} \cdot \sum_{s} \sum_{k} p_{i}^{(s,k)}
 $$
+
 Training objective (multi-class cross-entropy):
+
 $$
 L(\theta) = -\frac{1}{N} \sum_{i} \sum_{k} y_{ik} \log p_{ik}
 $$
@@ -61,9 +68,11 @@ $$
 #### 3.2 Physical Calibration Layer
 
 Temperature scaling and bias correction:
+
 $$
 \tilde{p}_{ik} = \frac{(p_{ik})^T \cdot b_{s(i),k}}{\sum_{j} (p_{ij})^T \cdot b_{s(i),j}}
 $$
+
 Where:
 - $T$ — temperature controlling probability sharpness
 - $b_{s(i),k}$ — bias for segment $s(i)$ and class $k$
@@ -72,14 +81,18 @@ Where:
   - $\text{extragalactic} \quad \text{if} \quad |\pi_i| < 0.1 \text{ and } \mu_i < 0.3$
   - $\text{global} \quad \text{otherwise}$
 
+
 #### 3.3 Segment Tie-Breaker
 
 Margin between top-2 classes:
+
 $$
 \Delta_i = \max_k \tilde{p}_{ik} - \text{second\_max}_k \tilde{p}_{ik}
 $$
+
 If $\Delta_i < \epsilon$ and emission lines (H$\alpha$ or [O III]) are strong:
 → increase $\tilde{p}(\text{quasar})$ by 5% and decrease $\tilde{p}(\text{galaxy})$ by 5%.
+
 
 This simulates astrophysical discrimination in spectral surveys.
 
@@ -88,16 +101,20 @@ This simulates astrophysical discrimination in spectral surveys.
 #### 4.1 Rare-Class Stratification
 
 Each class appears in every fold:
+
 $$
 |V_j \cap \{ y_i = c \}| \ge 1 \quad \text{for all } c, j
 $$
 
 #### 4.2 Joint Optuna Optimization
 
+
 Joint search for CatBoost hyperparameters, temperature $T$, and bias $b_{s,k}$:
+
 $$
 \text{maximize} \quad F_{1\_macro}(\text{argmax}_k \tilde{p}_{ik})
 $$
+
 **Search ranges:**
 
 | Parameter       | Range         |
@@ -115,6 +132,7 @@ Stop when $\Delta F_1 < 10^{-4}$ over 30 iterations.
 ### 5. Physical Regularization
 
 Astrophysical priors are applied multiplicatively:
+
 $$
 R(x) =
 \begin{cases}
@@ -124,7 +142,9 @@ R(x) =
 1.05 & \text{for galaxy if } \text{background\_noise} > \text{median}
 \end{cases}
 $$
+
 Corrected posterior:
+
 $$
 \hat{p}_{ik} = R(x_i) \cdot \tilde{p}_{ik}
 $$
@@ -132,10 +152,13 @@ $$
 ### 6. Ensemble and Inference
 
 Final prediction distribution per object:
+
 $$
 \bar{p}_i = \frac{1}{SK} \sum_{s} \sum_{k} p_{i}^{(s,k)}
 $$
+
 Predicted class:
+
 $$
 \hat{y}_i = \text{argmax}_k \bar{p}_{ik}
 $$
@@ -155,9 +178,11 @@ Residual confusion remains between galaxy and quasar, reflecting intrinsic spect
 We presented AstroCatBoostNet, a physically regularized gradient ensemble for astronomical classification. Its unified optimization of CatBoost hyperparameters, temperature scaling, and astrophysical bias vectors provides high accuracy ($F_1 \approx 0.97$) and interpretability.
 
 Formally, inference operates in a constrained posterior space:
+
 $$
 \tilde{p}_{ik} = \frac{(p_{ik})^T \cdot b_{s(i),k}}{\sum_{j} (p_{ij})^T \cdot b_{s(i),j}}, \quad \text{with} \quad b_{s(i),k} > 0
 $$
+
 This bridges data-driven learning with theory-driven astrophysics, enabling physically consistent predictions.
 
 Future extensions include:
